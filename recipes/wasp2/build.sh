@@ -1,11 +1,13 @@
 #!/bin/bash
-set -ex
+set -euxo pipefail
 
 # WASP2 Bioconda Build Script
 # Handles Rust compilation via maturin for Python+Rust hybrid package
 
 # Ensure cargo is available
-export PATH="${CARGO_HOME}/bin:${PATH}"
+if [[ -n "${CARGO_HOME:-}" ]]; then export PATH="${CARGO_HOME}/bin:${PATH}"; fi
+rustc --version
+python -c 'import subprocess; v = tuple(map(int, subprocess.check_output(["rustc", "--version"], text=True).split()[1].split(".")[:2])); assert v >= (1, 88), "WASP2 requires Rust >=1.88"'
 
 # Bundle Rust crate licenses (Bioconda requirement)
 # conda-forge cargo-bundle-licenses only supports --format and --output
@@ -17,28 +19,27 @@ cd ..
 # Set LIBCLANG_PATH for bindgen (hts-sys generates FFI bindings via libclang)
 export LIBCLANG_PATH="${BUILD_PREFIX}/lib"
 # Pass conda compiler flags to bindgen's clang invocation (needed for ARM builds)
-export BINDGEN_EXTRA_CLANG_ARGS="${CPPFLAGS} ${CFLAGS}"
+export BINDGEN_EXTRA_CLANG_ARGS="${CPPFLAGS:-} ${CFLAGS:-}"
 
-# Set up environment for htslib linking
-export HTSLIB_DIR="${PREFIX}"
-export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
-export LD_LIBRARY_PATH="${PREFIX}/lib:${LD_LIBRARY_PATH}"
-export LIBRARY_PATH="${PREFIX}/lib:${LIBRARY_PATH}"
-export CPATH="${PREFIX}/include:${CPATH}"
+# Bundled HTS builds use the compression/curl libraries from the host prefix.
+export PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+export LD_LIBRARY_PATH="${PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+export LIBRARY_PATH="${PREFIX}/lib:${LIBRARY_PATH:-}"
+export CPATH="${PREFIX}/include:${CPATH:-}"
 
 # Set correct linker for conda-provided compiler
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="$CC"
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="$CC"
 
 # macOS-specific settings
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    export RUSTFLAGS="-C link-arg=-undefined -C link-arg=dynamic_lookup"
+if [[ "${target_platform}" == osx-* ]]; then
+    export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-undefined -C link-arg=dynamic_lookup"
     # Force deployment target for correct wheel platform tag.
     # The macosx_deployment_target conda packages set MACOSX_DEPLOYMENT_TARGET
     # to the runner OS version (e.g. 26.0), but pip rejects wheels tagged higher
     # than the actual running macOS. Hardcode like snapatac2/pybigtools recipes.
     # ARM64 macOS starts at 11.0; x86_64 uses 10.13.
-    if [[ "$(uname -m)" == "arm64" ]]; then
+    if [[ "${target_platform}" == "osx-arm64" ]]; then
         export MACOSX_DEPLOYMENT_TARGET=11.0
     else
         export MACOSX_DEPLOYMENT_TARGET=10.13
@@ -63,12 +64,14 @@ fi
 # Build the Rust extension with maturin
 maturin build \
     --release \
+    --locked \
     --strip \
     --interpreter "${PYTHON}" \
-    -m rust/Cargo.toml
+    -m rust/Cargo.toml \
+    --out "${SRC_DIR}/candidate-wheels"
 
 # Install the built wheel
-"${PYTHON}" -m pip install rust/target/wheels/*.whl --no-deps --no-build-isolation --no-cache-dir -vvv
+"${PYTHON}" -m pip install "${SRC_DIR}"/candidate-wheels/*.whl --no-deps --no-build-isolation --no-cache-dir -vvv
 
 # Verify the Rust extension loads (no runtime deps needed for this check)
 python -c "import wasp2_rust; print('Rust extension loaded successfully')"
