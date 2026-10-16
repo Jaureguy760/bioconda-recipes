@@ -56,7 +56,7 @@ if [[ "${target_platform:-}" == osx-* ]]; then
         tool=$(find "${BUILD_PREFIX}/bin/" -name "*apple*-$toolname" 2>/dev/null)
         if [[ -n "$tool" ]]; then
             mv "${tool}" "${tool}.bak"
-            ln -sf "/Library/Developer/CommandLineTools/usr/bin/${toolname}" "$tool"
+            ln -sf "$(xcrun --find "$toolname")" "$tool"
         fi
     done
 fi
